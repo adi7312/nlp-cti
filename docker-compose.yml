@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # --- Baza Wektorowa ---
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: cti_qdrant
+    ports:
+      - "6333:6333" # Port REST API
+      - "6334:6334" # Port gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --- Baza Grafowa ---
+  neo4j:
+    image: neo4j:5
+    container_name: cti_neo4j
+    ports:
+      - "7474:7474" # Interfejs przeglądarkowy (HTTP)
+      - "7687:7687" # Port protokołu Bolt (dla Pythona)
+    environment:
+      # Ustawienie loginu i hasła (wymagane)
+      - NEO4J_AUTH=neo4j/twoje_haslo
+      # Automatyczne pobranie niezbędnych wtyczek
+      # GDS jest konieczny dla algorytmu Leiden, APOC przydaje się przy imporcie danych
+      - NEO4J_PLUGINS=["apoc", "graph-data-science"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:7474", "-O", "-"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  neo4j_plugins:
