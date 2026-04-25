@@ -1,16 +1,11 @@
-from qdrant_client import QdrantClient
-from neo4j import GraphDatabase
-from sentence_transformers import SentenceTransformer
 from langchain_community.chat_models import ChatOllama
-from langchain.schema import HumanMessage, SystemMessage
-
+from langchain_core.messages import HumanMessage, SystemMessage
+import glob
+import os
+from vector.db import ingest_pdfs_to_qdrant, search_vector
+from graph.db import ingest_to_neo4j, search_graph
 
 llm = ChatOllama(model="llama3", temperature=0) # firstly set up local ollama model, https://ollama.com/download/linux
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# docker compose up :)
-qdrant_client = QdrantClient(host="localhost", port=6333)
-neo4j_driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "twoje_haslo"))
 
 # example graph rag data, dummy :/
 extracted_relations = [
@@ -18,25 +13,8 @@ extracted_relations = [
     {"source": "APT29", "source_type": "ThreatActor", "relation": "COMMUNICATES_WITH", "target": "192.168.1.50", "target_type": "IP_Address"}
 ]
 
-def ingest_to_neo4j(relations):
-    """
-    Save extracted relations to Neo4j
-    """
+    
 
-    query = """
-    MERGE (s:Entity {name: $source, type: $source_type})
-    MERGE (t:Entity {name: $target, type: $target_type})
-    MERGE (s)-[r:RELATION {type: $relation}]->(t)
-    """
-    with neo4j_driver.session() as session:
-        for rel in relations:
-            session.run(query, 
-                        source=rel["source"], source_type=rel["source_type"],
-                        target=rel["target"], target_type=rel["target_type"],
-                        relation=rel["relation"])
-
-
-# --- 3. ROUTING ZAPYTAŃ (LLM-BASED ROUTING) ---
 def route_query(query: str) -> str:
     """
     LLM-based routing
@@ -56,31 +34,6 @@ def route_query(query: str) -> str:
     ])
     return response.content.strip().upper()
 
-def search_vector(query: str):
-    """
-    Semantic search within Qdrant.
-    """
-
-    query_vector = embedding_model.encode(query).tolist()
-    results = qdrant_client.search(collection_name="cti_reports", query_vector=query_vector, limit=2)
-    return [hit.payload['text'] for hit in results]
-
-def search_graph(query: str):
-    """
-    Graph search within neo4j
-    """
-
-    cypher_query = """
-    MATCH (s)-[r]->(t)
-    RETURN s.name, type(r), t.name LIMIT 5
-    """
-    context = []
-    with neo4j_driver.session() as session:
-        result = session.run(cypher_query)
-        for record in result:
-            context.append(f"{record['s.name']} {record['type(r)']} {record['t.name']}")
-    return context
-
 
 def generate_answer(query: str, vector_context: list, graph_context: list):
 
@@ -97,33 +50,55 @@ def generate_answer(query: str, vector_context: list, graph_context: list):
     Question: {query}
     Answer:
     """
+    print(prompt)
     response = llm.invoke([HumanMessage(content=prompt)])
     return response.content
 
 
 def main():
-
+    raw_data_path = os.path.join(os.path.dirname(__file__), "raw_data")
+    pdf_files = sorted(glob.glob(os.path.join(raw_data_path, "*.pdf")))
+    
+    if not pdf_files:
+        print(f"No PDF files found in {raw_data_path}")
+        return
+    
+    print(f"Found {len(pdf_files)} PDF file(s): {pdf_files}\n")
+    
+    print("--- Ingesting Graph Data ---")
     ingest_to_neo4j(extracted_relations)
-    user_query = input("Ask question: ")
     
-    route_decision = route_query(user_query)
-    print(f"Routing decision: {route_decision}")
+    print("\n--- Ingesting Vector Data ---")
+
+    strategies = ["sliding_window", "fixed", "sentence", "semantic"]
+    for s in strategies:
+        ingest_pdfs_to_qdrant(pdf_files, strategy=s) 
     
-    vector_data = []
-    graph_data = []
-    
-    if route_decision in ["VECTOR", "HYBRID"]:
-        print("Performing vector search")
-        vector_data = search_vector(user_query)
+    print("\n--- System Ready ---")
+    while True:
+        user_query = input("\nAsk question (or 'exit' to quit): ")
+        if user_query.lower() == 'exit':
+            break
+            
+        route_decision = route_query(user_query)
+        print(f"Routing decision: {route_decision}")
         
-    if route_decision in ["GRAPH", "HYBRID"]:
-        print("Performing graph search")
-        graph_data = search_graph(user_query)
+        vector_data = []
+        graph_data = []
         
-    final_answer = generate_answer(user_query, vector_data, graph_data)
-    
-    print("\n================ Response ================")
-    print(final_answer)
+        if route_decision in ["VECTOR", "HYBRID"]:
+            print("Performing vector search...")
+            vector_data = search_vector(user_query)
+            
+        if route_decision in ["GRAPH", "HYBRID"]:
+            print("Performing graph search...")
+            graph_data = search_graph(user_query)
+            
+        final_answer = generate_answer(user_query, vector_data, graph_data)
+        
+        print("\n================ Response ================")
+        print(final_answer)
+        print("=======================================")
     print("=======================================")
 
 if __name__ == "__main__":

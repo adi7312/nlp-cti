@@ -4,6 +4,8 @@ neo4j==5.18.0
 
 # Frameworki LLM i RAG
 langchain==0.1.12
+langchain-core==0.1.33
+langchain-text-splitters==0.0.1
 langchain-openai==0.0.8
 langchain-google-genai
 langchain-community==0.0.28
