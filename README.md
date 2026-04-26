@@ -26,6 +26,11 @@ ollama run llama3
 ```
 *(Keep the Ollama service running in the background).*
 
+### Optional: Gemma4 setup for dataset generation
+
+If Windows: Download Jan and within it gemma-4-E4B-it-Q8_0 model.
+Else: :). 
+
 ## 2. Running the Infrastructure
 
 The project uses Docker Compose to spin up the required databases. The `docker-compose.yml` includes Neo4j (pre-configured with APOC and Graph Data Science plugins) and Qdrant.
@@ -60,3 +65,7 @@ To stop the database containers (your data will be preserved in Docker volumes):
 ```bash
 docker compose down
 ```
+
+## 4. Ground-truth dataset generation
+
+Ragas anlong with gemma-4-E4B-it-Q8_0 were utilized to generate ground-truth dataset.

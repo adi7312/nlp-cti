@@ -1,24 +1,28 @@
 # Klienty baz danych
-qdrant-client==1.8.0
-neo4j==5.18.0
+qdrant-client>=1.8.0
+neo4j>=5.18.0
 
 # Frameworki LLM i RAG
-langchain==0.1.12
-langchain-core==0.1.33
-langchain-text-splitters==0.0.1
-langchain-openai==0.0.8
-langchain-google-genai
-langchain-community==0.0.28
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-text-splitters>=0.3.0
+langchain-openai>=0.2.0
+langchain-google-genai>=1.0.0
+langchain-community>=0.3.0
+langchain-huggingface
 
 # Przetwarzanie tekstu i Embeddingi
-sentence-transformers==2.5.1
-transformers==4.38.2
-torch==2.2.1
+sentence-transformers>=2.5.1
+transformers>=4.38.2
+torch>=2.2.1
 
 # Ekstrakcja relacji (BERT-BiLSTM-CRF)
-spacy==3.7.4
+spacy>=3.7.4
 
 # Narzędzia pomocnicze
-pydantic==2.6.3
-python-dotenv==1.0.1
-requests==2.31.0
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+requests>=2.31.0
+ragas>=0.2.0
+datasets>=2.18.0
+torch>=2.4.0
