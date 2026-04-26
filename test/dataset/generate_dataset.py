@@ -1,6 +1,10 @@
 import os
+import sys
 import pandas as pd
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
+
+# Add project root to path so config can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -10,6 +14,7 @@ from ragas.testset import TestsetGenerator
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.run_config import RunConfig
+from config import EMBEDDING_MODEL, LOCAL_API_URL, LLM_MODEL_NAME
 
 
 RAW_DATA_DIR = "raw_data" 
@@ -29,20 +34,17 @@ print(f"Successfully loaded {len(documents)} total pages.")
 
 print(f"Initializing Local Gemma model via OpenAI compatible API...")
 
-
-LOCAL_API_URL = "http://172.20.224.1:1337/v1" 
-
 local_llm = ChatOpenAI(
     base_url=LOCAL_API_URL,
     api_key="not-needed", 
-    model="gemma-4-E4B-it-Q8_0", 
+    model=LLM_MODEL_NAME, 
     temperature=0.0,
     model_kwargs={"response_format": {"type": "json_object"}}
 )
 
 print("Initializing Local HuggingFace Embeddings...")
 local_embeddings = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5"
+    model_name=EMBEDDING_MODEL
 )
 
 

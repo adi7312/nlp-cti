@@ -6,11 +6,12 @@ from langchain_experimental.text_splitter import SemanticChunker
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client.models import Distance, VectorParams, PointStruct
 import uuid
+from config import EMBEDDING_MODEL, EMBEDDING_DIMENSION, QDRANT_HOST, QDRANT_PORT
 
-qdrant_client = QdrantClient(host="localhost", port=6333)
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-lc_embedding_model = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
-VECTOR_SIZE = 384  # all-MiniLM-L6-v2 outputs 384 dimensions
+qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+lc_embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+VECTOR_SIZE = EMBEDDING_DIMENSION  # Configured in config.py
 
 
 def init_qdrant_collection(collection_name="cti_reports"):

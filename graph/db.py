@@ -1,6 +1,7 @@
 from neo4j import GraphDatabase
+from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 
-neo4j_driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "twoje_haslo"))
+neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 
 def ingest_to_neo4j(relations):

@@ -4,6 +4,7 @@ import glob
 import os
 from vector.db import ingest_pdfs_to_qdrant, search_vector
 from graph.db import ingest_to_neo4j, search_graph
+from config import EMBEDDING_MODEL
 
 llm = ChatOllama(model="llama3", temperature=0) # firstly set up local ollama model, https://ollama.com/download/linux
 
