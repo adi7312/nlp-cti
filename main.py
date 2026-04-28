@@ -70,7 +70,6 @@ def main():
     ingest_to_neo4j(extracted_relations)
     
     print("\n--- Ingesting Vector Data ---")
-
     strategies = ["sliding_window", "fixed", "sentence", "semantic"]
     for s in strategies:
         ingest_pdfs_to_qdrant(pdf_files, strategy=s) 
