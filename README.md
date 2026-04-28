@@ -68,4 +68,4 @@ docker compose down
 
 ## 4. Ground-truth dataset generation
 
-Ragas anlong with gemma-4-E4B-it-Q8_0 were utilized to generate ground-truth dataset.
+Ragas along with gemma-4-E4B-it-Q8_0 were utilized to generate ground-truth dataset.
