@@ -56,6 +56,7 @@ python src/scripts/run_question.py
 **Available arguments:**
 | Argument | Default | Description |
 |----------|---------|-------------|
+| `--config` | `config.toml` | Path to config.toml file |
 | `--model` | `llama3` | LLM model name for Ollama |
 | `--temperature` | `0.0` | LLM temperature setting |
 | `--data-dir` | `raw_data` | Directory containing PDF files to ingest |
@@ -90,5 +91,37 @@ docker compose down
 ```
 
 ## 4. Ground-truth dataset generation
+
+To generate a ground-truth dataset for evaluation, use the `generate_dataset.py` script:
+
+```bash
+python experiments/dataset/generate_dataset.py
+```
+
+**Available arguments:**
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--config` | `config.toml` | Path to config.toml file |
+| `--data-dir` | `raw_data` | Directory containing PDF files |
+| `--output-csv` | `cti_ground_truth_local.csv` | Output CSV file path |
+| `--test-size` | `10` | Number of test items to generate |
+| `--temperature` | `0.0` | LLM temperature |
+| `--max-workers` | `1` | Maximum workers for Ragas |
+| `--timeout` | `600` | Timeout in seconds |
+
+**Examples:**
+```bash
+# Generate dataset with default settings
+python experiments/dataset/generate_dataset.py
+
+# Generate 20 items with custom output
+python experiments/dataset/generate_dataset.py --test-size 20 --output-csv my_dataset.csv
+
+# Use custom config file and model
+python experiments/dataset/generate_dataset.py --config custom_config.toml --llm-model gemma-4-E4B-it-Q8_0
+
+# Override embedding model
+python experiments/dataset/generate_dataset.py --embedding-model BAAI/bge-small-en-v1.5
+```
 
 Ragas along with gemma-4-E4B-it-Q8_0 were utilized to generate ground-truth dataset.

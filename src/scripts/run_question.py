@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 from typing import List
 from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage
@@ -21,6 +22,7 @@ EXTRACTED_RELATIONS = [
 
 def parse_args():
     parser = argparse.ArgumentParser(description="CTI Question Answering System with RAG")
+    parser.add_argument("--config", type=str, default=None, help="Path to config.toml file (default: config.toml)")
     parser.add_argument("--model", type=str, default="llama3", help="LLM model name (default: llama3)")
     parser.add_argument("--temperature", type=float, default=0.0, help="LLM temperature (default: 0.0)")
     parser.add_argument("--data-dir", type=str, default="raw_data", help="Directory containing PDF files (default: raw_data)")
@@ -34,17 +36,14 @@ def generate_answer(llm, query: str, vector_context: List[str], graph_context: L
     context_str = "\n--- Vector context (Reports) ---\n" + "\n".join(vector_context)
     context_str += "\n\n--- Graph context (Relations) ---\n" + "\n".join(graph_context)
 
-    prompt = f"""
-    You are a CTI analyst. Answer the question based EXCLUSIVELY on the provided context.
+    prompt = f"""You are a CTI analyst. Answer the question based EXCLUSIVELY on the provided context.
     If the context does not contain the answer, say that you do not know.
 
     Context:
     {context_str}
 
     Question: {query}
-    Answer:
-    """
-    print(prompt)
+    Answer:"""
     response = llm.invoke([HumanMessage(content=prompt)])
     return response.content
 
@@ -55,9 +54,12 @@ def main() -> None:
     # Initialize LLM with parsed arguments
     llm = ChatOllama(model=args.model, temperature=args.temperature)
 
-    # Load configs and initialize RAG instances
-    vector_config = VectorConfig.load()
-    graph_config = GraphConfig.load()
+    # Load configs from specified path or default location
+    config_path = args.config
+    if config_path is not None:
+        config_path = Path(config_path)
+    vector_config = VectorConfig.load(config_path)
+    graph_config = GraphConfig.load(config_path)
 
     vector_rag = VectorRAG(vector_config)
     graph_rag = GraphRAG(graph_config)
