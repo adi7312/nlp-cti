@@ -21,6 +21,7 @@ torch>=2.2.1
 spacy>=3.7.4
 
 # Narzędzia pomocnicze
+pypdf>=6.11.0
 pydantic>=2.7.0
 python-dotenv>=1.0.1
 requests>=2.31.0
