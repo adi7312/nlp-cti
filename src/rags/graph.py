@@ -1,8 +1,8 @@
 from neo4j import GraphDatabase
 from typing import List, Dict, Any
 
-from .base import BaseRAG
-from utils.config import GraphConfig
+from src.rags.base import BaseRAG
+from src.utils.config import GraphConfig
 
 
 class GraphRAG(BaseRAG):

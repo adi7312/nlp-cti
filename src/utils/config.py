@@ -22,6 +22,14 @@ def _dict_to_ns(data: Dict[str, Any]) -> SimpleNamespace:
 
 
 def load_config(file_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load entire config from TOML file.
+
+    Args:
+        file_path: Path to config.toml. If None, uses default location.
+
+    Returns:
+        Dictionary with full config.
+    """
     if file_path is None:
         file_path = PROJECT_ROOT / "config.toml"
     with open(file_path, "rb") as f:

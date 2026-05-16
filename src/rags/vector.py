@@ -6,9 +6,9 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 import uuid
 from typing import List, Dict, Any, cast
 
-from .base import BaseRAG
-from utils.config import VectorConfig
-from utils.chunk_strategies import chunk_text
+from src.rags.base import BaseRAG
+from src.utils.config import VectorConfig
+from src.utils.chunk_strategies import chunk_text
 
 
 class VectorRAG(BaseRAG):
@@ -101,9 +101,10 @@ class VectorRAG(BaseRAG):
         """
         collection_name = cast(str, kwargs.get("collection_name", "cti_reports"))
         query_vector = self.embedding_model.encode(query).tolist()
-        results = self.qdrant_client.search(
+        results = self.qdrant_client.query_points(
             collection_name=collection_name,
-            query_vector=query_vector,
-            limit=2
+            query=query_vector,
+            limit=2,
+            with_payload=True
         )
-        return [hit.payload['text'] for hit in results]
+        return [point.payload['text'] for point in results.points]
