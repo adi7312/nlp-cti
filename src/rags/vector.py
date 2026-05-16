@@ -25,10 +25,6 @@ class VectorRAG(BaseRAG):
         self.lc_embedding_model = HuggingFaceEmbeddings(model_name=config.model)
         self.vector_size = config.dimension
 
-    def connect(self) -> Any:
-        """Return the Qdrant client connection."""
-        return self.qdrant_client
-
     def init_storage(self, name: str, **kwargs: Dict[str, Any]) -> None:
         """Ensure the Qdrant collection exists with the correct vector dimensions.
 

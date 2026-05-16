@@ -5,17 +5,8 @@ from typing import List, Dict, Any
 class BaseRAG(ABC):
     """Abstract base class for RAG (Retrieval-Augmented Generation) implementations.
 
-    Subclasses must implement connection, ingestion, search, and storage initialization methods.
+    Subclasses must implement ingestion, search, and storage initialization methods.
     """
-
-    @abstractmethod
-    def connect(self) -> Any:
-        """Initialize and return the storage client/connection.
-
-        Returns:
-            The initialized client/driver for the storage backend.
-        """
-        pass
 
     @abstractmethod
     def ingest(self, data: Any, **kwargs: Dict[str, Any]) -> None:
