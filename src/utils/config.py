@@ -1,19 +1,29 @@
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple, Optional, Dict, Any
 
-def load_config(file_path: Optional[Path] = None) -> Dict[str, Any]:
-    """Load entire config from TOML file.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-    Args:
-        file_path: Path to config.toml. If None, uses default location.
 
-    Returns:
-        Dictionary with full config.
-    """
+def get_config(file_path: Optional[Path] = None) -> SimpleNamespace:
     if file_path is None:
-        file_path = Path(__file__).parent.parent / "config.toml"
+        file_path = PROJECT_ROOT / "config.toml"
+    with open(file_path, "rb") as f:
+        data = tomllib.load(f)
+    return _dict_to_ns(data)
 
+
+def _dict_to_ns(data: Dict[str, Any]) -> SimpleNamespace:
+    ns = SimpleNamespace()
+    for key, value in data.items():
+        setattr(ns, key, _dict_to_ns(value) if isinstance(value, dict) else value)
+    return ns
+
+
+def load_config(file_path: Optional[Path] = None) -> Dict[str, Any]:
+    if file_path is None:
+        file_path = PROJECT_ROOT / "config.toml"
     with open(file_path, "rb") as f:
         return tomllib.load(f)
 

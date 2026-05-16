@@ -22,15 +22,18 @@ from ragas.metrics import (
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.run_config import RunConfig
-from config import EMBEDDING_MODEL, LOCAL_API_URL, LLM_MODEL_NAME
+from src.utils.config import get_config
 
 
-CSV_PATH = "test/dataset/cti_ground_truth_local.csv"
+CSV_PATH = "experiments/dataset/cti_ground_truth_local.csv"
 STRATEGIES = ["sliding_window", "fixed", "sentence", "semantic"] # Update these to match your exact Qdrant suffixes
 
-MODEL_NAME = LLM_MODEL_NAME
+config = get_config()
+EMBEDDING_MODEL = config.embedding.model
+LOCAL_API_URL = config.llm.api_url
+MODEL_NAME = config.llm.model_name
 
-qdrant_client = QdrantClient("http://localhost:6333") 
+qdrant_client = QdrantClient("http://localhost:6333")
 embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 local_llm = ChatOpenAI(
     base_url=LOCAL_API_URL,
@@ -63,13 +66,13 @@ rag_chain = rag_prompt | local_llm
 def answer_question_with_rag(question: str, collection_name: str, top_k: int = 3):
     """Embeds the question, searches Qdrant, and generates an answer."""
     query_vector = embedding_model.encode(question).tolist()
-    search_results = qdrant_client.search(
+    results = qdrant_client.query_points(
         collection_name=collection_name,
-        query_vector=query_vector,
-        limit=top_k
+        query=query_vector,
+        limit=top_k,
+        with_payload=True
     )
-    
-    retrieved_contexts = [hit.payload.get("text", "") for hit in search_results]
+    retrieved_contexts = [hit.payload.get("text", "") for hit in results.points]
     combined_context = "\n\n---\n\n".join(retrieved_contexts)
     
     response = rag_chain.invoke({"context": combined_context, "question": question})
