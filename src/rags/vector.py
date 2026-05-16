@@ -8,7 +8,7 @@ from typing import List, Dict, Any, cast
 
 from .base import BaseRAG
 from utils.config import VectorConfig
-from utils.text_splitter import chunk_text
+from utils.chunk_strategies import chunk_text
 
 
 class VectorRAG(BaseRAG):

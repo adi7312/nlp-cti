@@ -45,19 +45,42 @@ You can verify the services are running at:
 * **Qdrant Dashboard:** http://localhost:6333/dashboard
 
 ## 3. Running the Application
+### Chat-mode
 
-Once the infrastructure and Ollama are fully initialized, you can start the main orchestrator script:
+Use `run_question.py` with command-line arguments:
 
 ```bash
-python main.py
+python src/scripts/run_question.py
+```
+
+**Available arguments:**
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model` | `llama3` | LLM model name for Ollama |
+| `--temperature` | `0.0` | LLM temperature setting |
+| `--data-dir` | `raw_data` | Directory containing PDF files to ingest |
+| `--vector-collection` | `cti_reports` | Qdrant collection name for vector data |
+| `--graph-collection` | `cti_graph` | Neo4j collection name for graph data |
+| `--skip-ingest` | - | Skip data ingestion and go straight to querying |
+
+**Examples:**
+```bash
+# Use a different model with higher temperature
+python src/scripts/run_question.py --model llama3 --temperature 0.7
+
+# Skip ingestion (use existing data)
+python src/scripts/run_question.py --skip-ingest
+
+# Custom data directory and collection names
+python src/scripts/run_question.py --data-dir my_pdfs --vector-collection my_vectors --graph-collection my_graph
 ```
 
 **What the script does:**
-1. Connects to local Qdrant and Neo4j instances.
-2. Ingests sample CTI data (Threat Actors, IP Addresses, Vulnerabilities) into the Neo4j graph.
-3. Prompts the user for a query (e.g., *"Z jakimi IP komunikuje sie APT29?"*).
-4. Uses the local Llama 3 model to classify and route the query (`GRAPH`, `VECTOR`, or `HYBRID`).
-5. Retrieves the relevant context and generates a factual, hallucination-free response.
+1. Loads configuration and initializes GraphRAG and VectorRAG instances.
+2. Ingests PDF files from the specified directory using multiple chunking strategies.
+3. Ingests sample graph relations into Neo4j.
+4. Enters an interactive loop where you can ask questions.
+5. Routes each query, retrieves relevant context, and generates answers.
 
 ## Shutting Down
 To stop the database containers (your data will be preserved in Docker volumes):

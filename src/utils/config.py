@@ -17,7 +17,7 @@ def load_config(file_path: Optional[Path] = None) -> Dict[str, Any]:
     with open(file_path, "rb") as f:
         return tomllib.load(f)
 
-// -----------------------------------------------
+# -----------------------------------------------
 
 class GraphConfig(NamedTuple):
     """Configuration for Graph RAG implementation."""

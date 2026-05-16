@@ -1,44 +1,36 @@
+import argparse
+from typing import List
 from langchain_community.chat_models import ChatOllama
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 import glob
 import os
 
-from vector.db import ingest_pdfs_to_qdrant, search_vector
-from graph.db import ingest_to_neo4j, search_graph
-from util.config import load_config
+from rags import GraphRAG, VectorRAG
+from utils.config import GraphConfig, VectorConfig
+from utils.query_routing import route_query
 
-llm = ChatOllama(model="llama3", temperature=0) # firstly set up local ollama model, https://ollama.com/download/linux
 
-# example graph rag data, dummy :/
-extracted_relations = [
+STRATEGIES = ["sliding_window", "fixed", "sentence", "semantic"]
+
+# Example graph RAG data for demonstration
+EXTRACTED_RELATIONS = [
     {"source": "APT29", "source_type": "ThreatActor", "relation": "USES_VULNERABILITY", "target": "CVE-2021-26855", "target_type": "Vulnerability"},
     {"source": "APT29", "source_type": "ThreatActor", "relation": "COMMUNICATES_WITH", "target": "192.168.1.50", "target_type": "IP_Address"}
 ]
 
 
-
-def route_query(query: str) -> str:
-    """
-    LLM-based routing
-    """
-
-    system_prompt = """
-    You are a routing system for a CTI (Cyber Threat Intelligence) database.
-    Analyze the question and choose ONE path:
-    - Return "VECTOR" if the question concerns general descriptions, definitions, behaviors, or methods.
-    - Return "GRAPH" if the question concerns explicit connections (e.g., what IPs, what vulnerabilities, who is connected to what).
-    - Return "HYBRID" if the question requires both types of information.
-    Return ONLY one word from the above.
-    """
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=query)
-    ])
-    return response.content.strip().upper()
+def parse_args():
+    parser = argparse.ArgumentParser(description="CTI Question Answering System with RAG")
+    parser.add_argument("--model", type=str, default="llama3", help="LLM model name (default: llama3)")
+    parser.add_argument("--temperature", type=float, default=0.0, help="LLM temperature (default: 0.0)")
+    parser.add_argument("--data-dir", type=str, default="raw_data", help="Directory containing PDF files (default: raw_data)")
+    parser.add_argument("--vector-collection", type=str, default="cti_reports", help="Vector collection name (default: cti_reports)")
+    parser.add_argument("--graph-collection", type=str, default="cti_graph", help="Graph collection name (default: cti_graph)")
+    parser.add_argument("--skip-ingest", action="store_true", help="Skip data ingestion and go straight to querying")
+    return parser.parse_args()
 
 
-def generate_answer(query: str, vector_context: list, graph_context: list):
-
+def generate_answer(llm, query: str, vector_context: List[str], graph_context: List[str]) -> str:
     context_str = "\n--- Vector context (Reports) ---\n" + "\n".join(vector_context)
     context_str += "\n\n--- Graph context (Relations) ---\n" + "\n".join(graph_context)
 
@@ -57,8 +49,23 @@ def generate_answer(query: str, vector_context: list, graph_context: list):
     return response.content
 
 
-def main():
-    raw_data_path = os.path.join(os.path.dirname(__file__), "raw_data")
+def main() -> None:
+    args = parse_args()
+
+    # Initialize LLM with parsed arguments
+    llm = ChatOllama(model=args.model, temperature=args.temperature)
+
+    # Load configs and initialize RAG instances
+    vector_config = VectorConfig.load()
+    graph_config = GraphConfig.load()
+
+    vector_rag = VectorRAG(vector_config)
+    graph_rag = GraphRAG(graph_config)
+
+    # Initialize storage
+    graph_rag.init_storage(args.graph_collection)
+
+    raw_data_path = os.path.join(os.path.dirname(__file__), args.data_dir)
     pdf_files = sorted(glob.glob(os.path.join(raw_data_path, "*.pdf")))
 
     if not pdf_files:
@@ -67,40 +74,45 @@ def main():
 
     print(f"Found {len(pdf_files)} PDF file(s): {pdf_files}\n")
 
-    print("--- Ingesting Graph Data ---")
-    ingest_to_neo4j(extracted_relations)
+    if not args.skip_ingest:
+        print("--- Ingesting Graph Data ---")
+        graph_rag.ingest(EXTRACTED_RELATIONS)
 
-    print("\n--- Ingesting Vector Data ---")
-    strategies = ["sliding_window", "fixed", "sentence", "semantic"]
-    for s in strategies:
-        ingest_pdfs_to_qdrant(pdf_files, strategy=s)
+        print("\n--- Ingesting Vector Data ---")
+        for strategy in STRATEGIES:
+            vector_rag.ingest(pdf_files, collection_name=args.vector_collection, strategy=strategy)
 
-    print("\n--- System Ready ---")
+        print("\n--- System Ready ---")
+    else:
+        print("--- Skipping ingestion (as requested) ---")
+        print("--- System Ready ---")
+
     while True:
         user_query = input("\nAsk question (or 'exit' to quit): ")
-        if user_query.lower() == 'exit':
+        if user_query.lower() == "exit":
             break
 
-        route_decision = route_query(user_query)
+        route_decision = route_query(user_query, llm=llm)
         print(f"Routing decision: {route_decision}")
 
-        vector_data = []
-        graph_data = []
+        vector_data: List[str] = []
+        graph_data: List[str] = []
 
         if route_decision in ["VECTOR", "HYBRID"]:
             print("Performing vector search...")
-            vector_data = search_vector(user_query)
+            vector_data = vector_rag.search(user_query, collection_name=args.vector_collection)
 
         if route_decision in ["GRAPH", "HYBRID"]:
             print("Performing graph search...")
-            graph_data = search_graph(user_query)
+            graph_data = graph_rag.search(user_query)
 
-        final_answer = generate_answer(user_query, vector_data, graph_data)
+        final_answer = generate_answer(llm, user_query, vector_data, graph_data)
 
         print("\n================ Response ================")
         print(final_answer)
         print("=======================================")
-    print("=======================================")
+    print("Goodbye!")
+
 
 if __name__ == "__main__":
     main()
