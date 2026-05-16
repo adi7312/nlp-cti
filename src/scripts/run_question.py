@@ -1,17 +1,23 @@
 import argparse
+import os
+import sys
 from pathlib import Path
 from typing import List
 from langchain_community.chat_models import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 import glob
-import os
 
-from rags import GraphRAG, VectorRAG
-from utils.config import GraphConfig, VectorConfig
-from utils.query_routing import route_query
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.rags import GraphRAG, VectorRAG
+from src.utils.config import GraphConfig, VectorConfig, get_config
+from src.utils.query_routing import route_query
 
 
 STRATEGIES = ["sliding_window", "fixed", "sentence", "semantic"]
+config = get_config()
 
 # Example graph RAG data for demonstration
 EXTRACTED_RELATIONS = [
@@ -52,8 +58,14 @@ def main() -> None:
     args = parse_args()
 
     # Initialize LLM with parsed arguments
-    llm = ChatOllama(model=args.model, temperature=args.temperature)
-
+    # llm = ChatOllama(model=args.model, temperature=args.temperature)
+    llm = ChatOpenAI(
+        base_url=config.llm.api_url,
+        api_key="not-needed", 
+        model=config.llm.model_name, 
+        temperature=args.temperature,
+        default_headers={"Host": "localhost"} 
+    )
     # Load configs from specified path or default location
     config_path = args.config
     if config_path is not None:
@@ -67,7 +79,7 @@ def main() -> None:
     # Initialize storage
     graph_rag.init_storage(args.graph_collection)
 
-    raw_data_path = os.path.join(os.path.dirname(__file__), args.data_dir)
+    raw_data_path = os.path.abspath(args.data_dir)
     pdf_files = sorted(glob.glob(os.path.join(raw_data_path, "*.pdf")))
 
     if not pdf_files:
