@@ -1,0 +1,19 @@
+# Global configuration constants
+# Ensures consistency across the entire project
+
+[embedding]
+model = "BAAI/bge-small-en-v1.5"
+dimension = 384
+
+[qdrant]
+host = "localhost"
+port = 6333
+
+[llm]
+api_url = "http://172.20.224.1:1337/v1"
+model_name = "gemma-4-E4B-it-Q8_0"
+
+[neo4j]
+uri = "bolt://localhost:7687"
+user = "neo4j"
+password = "twoje_haslo"
