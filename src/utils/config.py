@@ -5,22 +5,6 @@ from typing import NamedTuple, Optional, Dict, Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-
-def get_config(file_path: Optional[Path] = None) -> SimpleNamespace:
-    if file_path is None:
-        file_path = PROJECT_ROOT / "config.toml"
-    with open(file_path, "rb") as f:
-        data = tomllib.load(f)
-    return _dict_to_ns(data)
-
-
-def _dict_to_ns(data: Dict[str, Any]) -> SimpleNamespace:
-    ns = SimpleNamespace()
-    for key, value in data.items():
-        setattr(ns, key, _dict_to_ns(value) if isinstance(value, dict) else value)
-    return ns
-
-
 def load_config(file_path: Optional[Path] = None) -> Dict[str, Any]:
     """Load entire config from TOML file.
 
@@ -34,6 +18,33 @@ def load_config(file_path: Optional[Path] = None) -> Dict[str, Any]:
         file_path = PROJECT_ROOT / "config.toml"
     with open(file_path, "rb") as f:
         return tomllib.load(f)
+
+def get_config(file_path: Optional[Path] = None) -> SimpleNamespace:
+    """Load config from TOML file and convert to a nested SimpleNamespace.
+
+    Args:
+        file_path: Path to config.toml. If None, uses default location.
+
+    Returns:
+        SimpleNamespace with config values accessible as attributes.
+    """
+    data = load_config(file_path)
+    return _dict_to_ns(data)
+
+
+def _dict_to_ns(data: Dict[str, Any]) -> SimpleNamespace:
+    """Recursively convert a dictionary to a SimpleNamespace.
+
+    Args:
+        data: Dictionary to convert. Nested dicts are converted to nested SimpleNamespace objects.
+
+    Returns:
+        SimpleNamespace with keys as attributes and nested dicts recursively converted.
+    """
+    ns = SimpleNamespace()
+    for key, value in data.items():
+        setattr(ns, key, _dict_to_ns(value) if isinstance(value, dict) else value)
+    return ns
 
 # -----------------------------------------------
 
