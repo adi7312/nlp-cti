@@ -5,6 +5,9 @@
 model = "BAAI/bge-small-en-v1.5"
 dimension = 384
 
+[extraction]
+bert_model = "bert-base-uncased"
+
 [qdrant]
 host = "localhost"
 port = 6333

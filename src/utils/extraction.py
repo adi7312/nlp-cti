@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup
 from torch.optim import AdamW
 from torchcrf import CRF
+import re
 
 class NERDataset(Dataset):
     """Dataset for Named Entity Recognition."""
@@ -730,8 +731,8 @@ class EntityRelationExtractor:
         Returns:
             Dictionary containing extracted entities and relations.
         """
-        # Tokenize text - simple whitespace split
-        tokens = text.split()
+        # This regex matches words, numbers, and punctuation marks as separate tokens
+        tokens = re.findall(r"[\w']+|[.,!?;:\"()\[\]\-]", text)
 
         if self.ner_model:
             entities = self.predict_entities([tokens])[0]
