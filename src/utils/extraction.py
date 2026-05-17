@@ -8,19 +8,12 @@ from typing import Dict, List, Optional, Tuple, Any
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from transformers import BertModel, BertTokenizer, AdamW, get_linear_schedule_with_warmup
+from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup
+from torch.optim import AdamW
 from torchcrf import CRF
 
 class NERDataset(Dataset):
-    """Dataset for Named Entity Recognition.
-
-    Attributes:
-        texts: List of tokenized text sequences.
-        labels: List of corresponding label sequences.
-        tokenizer: BERT tokenizer for text processing.
-        label2idx: Mapping from label names to indices.
-        max_len: Maximum sequence length.
-    """
+    """Dataset for Named Entity Recognition."""
 
     def __init__(self, texts: List[List[str]], labels: List[List[str]], tokenizer: BertTokenizer, label2idx: Dict[str, int], max_len: int = 128) -> None:
         """Initialize NER dataset.
@@ -51,9 +44,8 @@ class NERDataset(Dataset):
             Dictionary containing input_ids, attention_mask, and labels.
         """
         text = self.texts[idx]
-        label = self.labels[idx]
+        word_labels = self.labels[idx]
 
-        # Tokenize text
         encoding = self.tokenizer(
             text,
             max_length=self.max_len,
@@ -63,35 +55,40 @@ class NERDataset(Dataset):
             is_split_into_words=True
         )
 
-        # Convert labels to indices
-        label_ids = [self.label2idx.get(l, self.label2idx['O']) for l in label]
-        label_ids = label_ids[:self.max_len]
+        labels = []
+        word_ids = encoding.word_ids(batch_index=0)
+        previous_word_idx = None
 
-        # Pad labels
-        label_ids = label_ids + [self.label2idx['O']] * (self.max_len - len(label_ids))
-        label_ids = torch.tensor(label_ids, dtype=torch.long)
+        for word_idx in word_ids:
+            if word_idx is None:
+                # Special tokens ([CLS], [SEP], [PAD])
+                labels.append(self.label2idx.get('O', 0))
+            elif word_idx != previous_word_idx:
+                # First sub-token of a word
+                label = word_labels[word_idx]
+                labels.append(self.label2idx.get(label, self.label2idx.get('O', 0)))
+            else:
+                # Subsequent sub-tokens of a word
+                label = word_labels[word_idx]
+                # Option: use 'I-' version of the label or 'O' or keep the same
+                # Standard practice for NER with BERT: use the same label or a special 'X' label
+                # Here we use the same label but could also use I- version if it was B-
+                if label.startswith('B-'):
+                    label = 'I-' + label[2:]
+                labels.append(self.label2idx.get(label, self.label2idx.get('O', 0)))
+            previous_word_idx = word_idx
 
         return {
             'input_ids': encoding['input_ids'].flatten(),
             'attention_mask': encoding['attention_mask'].flatten(),
-            'labels': label_ids
+            'labels': torch.tensor(labels, dtype=torch.long)
         }
 
-
 class RelationDataset(Dataset):
-    """Dataset for Relation Extraction.
-
-    Attributes:
-        texts: List of tokenized text sequences.
-        entities: List of entity spans.
-        relations: List of relation triples (head, tail, relation_type).
-        tokenizer: BERT tokenizer for text processing.
-        rel2idx: Mapping from relation names to indices.
-        max_len: Maximum sequence length.
-    """
+    """Dataset for Relation Extraction."""
 
     def __init__(self, texts: List[List[str]], entities: List[List[Tuple[int, int, str]]], relations: List[List[Tuple[int, int, str]]],
-                tokenizer: BertTokenizer, rel2idx: Dict[str, int], max_len: int = 128) -> None:
+                tokenizer: BertTokenizer, rel2idx: Dict[str, int], max_len: int = 128, max_entities: int = 32) -> None:
         """Initialize relation extraction dataset.
 
         Args:
@@ -101,6 +98,7 @@ class RelationDataset(Dataset):
             tokenizer: BERT tokenizer instance.
             rel2idx: Dictionary mapping relation names to indices.
             max_len: Maximum sequence length (default: 128).
+            max_entities: Maximum number of entities per sequence (default: 32).
         """
         self.texts = texts
         self.entities = entities
@@ -108,6 +106,7 @@ class RelationDataset(Dataset):
         self.tokenizer = tokenizer
         self.rel2idx = rel2idx
         self.max_len = max_len
+        self.max_entities = max_entities
 
     def __len__(self) -> int:
         return len(self.texts)
@@ -119,10 +118,10 @@ class RelationDataset(Dataset):
             idx: Index of the item to retrieve.
 
         Returns:
-            Dictionary containing input_ids, attention_mask, entity_spans, and relation_matrix.
+            Dictionary containing input_ids, attention_mask, entity_positions, and relation_matrix.
         """
         text = self.texts[idx]
-        entity_spans = self.entities[idx]
+        entity_spans = self.entities[idx][:self.max_entities]
         relation_triples = self.relations[idx]
 
         # Tokenize text
@@ -135,44 +134,55 @@ class RelationDataset(Dataset):
             is_split_into_words=True
         )
 
-        # Create entity position matrix (num_entities x seq_len)
-        num_entities = len(entity_spans)
-        entity_positions = torch.zeros((num_entities, self.max_len))
+        word_ids = encoding.word_ids(batch_index=0)
+
+        # Map word indices to sub-token indices
+        word_to_subtokens = {}
+        for sub_idx, word_idx in enumerate(word_ids):
+            if word_idx is not None:
+                if word_idx not in word_to_subtokens:
+                    word_to_subtokens[word_idx] = []
+                word_to_subtokens[word_idx].append(sub_idx)
+
+        # Create entity position matrix (max_entities x seq_len)
+        entity_positions = torch.zeros((self.max_entities, self.max_len))
 
         for e_idx, (start, end, _) in enumerate(entity_spans):
-            if end <= self.max_len:
-                entity_positions[e_idx, start:end] = 1
+            # start, end are indices in the original 'text' list
+            subtoken_indices = []
+            for word_idx in range(start, end):
+                if word_idx in word_to_subtokens:
+                    subtoken_indices.extend(word_to_subtokens[word_idx])
 
-        # Create relation matrix (num_entities x num_entities x num_relations)
-        num_relations = len(self.rel2idx)
-        relation_matrix = torch.zeros((num_entities, num_entities, num_relations))
+            for sub_idx in subtoken_indices:
+                if sub_idx < self.max_len:
+                    entity_positions[e_idx, sub_idx] = 1
 
+        # Create relation matrix (max_entities x max_entities)
+        # We use a single label per pair for CrossEntropyLoss
+        relation_matrix = torch.zeros((self.max_entities, self.max_entities), dtype=torch.long)
+        # Initialize with 'no_relation' index (usually 0)
+        no_rel_idx = self.rel2idx.get('no_relation', 0)
+        relation_matrix.fill_(no_rel_idx)
+
+        num_actual_entities = len(entity_spans)
         for head_idx, tail_idx, rel_type in relation_triples:
-            if head_idx < num_entities and tail_idx < num_entities:
-                rel_idx = self.rel2idx.get(rel_type, 0)
-                relation_matrix[head_idx, tail_idx, rel_idx] = 1
+            if head_idx < num_actual_entities and tail_idx < num_actual_entities:
+                rel_idx = self.rel2idx.get(rel_type, no_rel_idx)
+                relation_matrix[head_idx, tail_idx] = rel_idx
 
         return {
             'input_ids': encoding['input_ids'].flatten(),
             'attention_mask': encoding['attention_mask'].flatten(),
             'entity_positions': entity_positions,
-            'relation_matrix': relation_matrix
+            'labels': relation_matrix
         }
-
 
 class BERTBiLSTMCRF(nn.Module):
     """BERT-BiLSTM-CRF model for Named Entity Recognition.
 
     Architecture:
         BERT -> BiLSTM -> CRF
-
-    Attributes:
-        bert: BERT model for token embeddings.
-        bilstm: Bi-directional LSTM layer.
-        crf: Conditional Random Field layer.
-        dropouts: Dropout layers.
-        label2idx: Mapping from label names to indices.
-        num_labels: Number of unique labels.
     """
 
     def __init__(self, bert_model_name: str = 'bert-base-uncased', hidden_size: int = 128, num_layers: int = 2, dropout: float = 0.1,
@@ -242,11 +252,7 @@ class BERTBiLSTMCRF(nn.Module):
         else:
             return emissions, None
 
-    def decode(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor
-    ) -> List[List[str]]:
+    def decode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> List[List[str]]:
         """Decode predictions using CRF.
 
         Args:
@@ -271,29 +277,15 @@ class BERTBiLSTMCRF(nn.Module):
 
         return batch_predictions
 
-
 class BERTBiLSTMRelationModel(nn.Module):
     """BERT-BiLSTM model for Relation Extraction.
 
     Architecture:
         BERT -> BiLSTM -> Entity-aware attention -> Relation classification
-
-    Attributes:
-        bert: BERT model for token embeddings.
-        bilstm: Bi-directional LSTM layer.
-        rel2idx: Mapping from relation names to indices.
-        num_relations: Number of unique relations.
     """
 
-    def __init__(
-        self,
-        bert_model_name: str = 'bert-base-uncased',
-        hidden_size: int = 128,
-        num_layers: int = 2,
-        dropout: float = 0.1,
-        rel2idx: Optional[Dict[str, int]] = None,
-        max_entities: int = 20
-    ) -> None:
+    def __init__(self, bert_model_name: str = 'bert-base-uncased', hidden_size: int = 128, num_layers: int = 2, dropout: float = 0.1,
+                rel2idx: Optional[Dict[str, int]] = None, max_entities: int = 32) -> None:
         """Initialize BERT-BiLSTM relation extraction model.
 
         Args:
@@ -302,7 +294,7 @@ class BERTBiLSTMRelationModel(nn.Module):
             num_layers: Number of BiLSTM layers (default: 2).
             dropout: Dropout probability (default: 0.1).
             rel2idx: Dictionary mapping relation names to indices.
-            max_entities: Maximum number of entities per document (default: 20).
+            max_entities: Maximum number of entities per document (default: 32).
         """
         super(BERTBiLSTMRelationModel, self).__init__()
 
@@ -327,33 +319,26 @@ class BERTBiLSTMRelationModel(nn.Module):
         # Entity-aware attention
         self.entity_attention = nn.MultiheadAttention(
             embed_dim=hidden_size * 2,
-            num_heads=4
+            num_heads=4,
+            batch_first=True
         )
 
         # Relation classification
         self.relation_classifier = nn.Linear(hidden_size * 2 * 2, self.num_relations)
 
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        entity_positions: torch.Tensor,
-        labels: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, entity_positions: torch.Tensor,
+                labels: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Forward pass of the model.
 
         Args:
             input_ids: Input token IDs (batch_size, seq_len).
             attention_mask: Attention mask (batch_size, seq_len).
             entity_positions: Entity position matrix (batch_size, num_entities, seq_len).
-            labels: Optional ground truth relation matrix (batch_size, num_entities, num_entities, num_relations).
+            labels: Optional ground truth relation indices (batch_size, num_entities, num_entities).
 
         Returns:
             Tuple of (relation_logits, loss). Loss is None if labels not provided.
         """
-        batch_size = input_ids.size(0)
-        seq_len = input_ids.size(1)
-
         # BERT embeddings
         outputs = self.bert(
             input_ids=input_ids,
@@ -366,41 +351,37 @@ class BERTBiLSTMRelationModel(nn.Module):
         lstm_output = self.dropout(lstm_output)
 
         # Get entity representations using entity positions
-        num_entities = entity_positions.size(1)
-        entity_reps = []
-
-        for b in range(batch_size):
-            entity_pos = entity_positions[b]  # (num_entities, seq_len)
-            weighted_embeddings = torch.matmul(
-                entity_pos.unsqueeze(1),
-                lstm_output[b].unsqueeze(0)
-            ).squeeze(1)  # (num_entities, hidden_size * 2)
-
-            # Normalize by entity length
-            entity_lengths = entity_pos.sum(dim=1, keepdim=True)
-            entity_reps.append(weighted_embeddings / (entity_lengths + 1e-8))
-
-        entity_reps = torch.stack(entity_reps, dim=0)  # (batch_size, num_entities, hidden_size * 2)
+        # Vectorized version of weighted average pooling
+        # entity_positions: (batch_size, num_entities, seq_len)
+        # lstm_output: (batch_size, seq_len, hidden_size * 2)
+        entity_sums = torch.matmul(entity_positions, lstm_output) # (batch_size, num_entities, hidden_size * 2)
+        entity_lengths = entity_positions.sum(dim=2, keepdim=True) # (batch_size, num_entities, 1)
+        entity_reps = entity_sums / (entity_lengths + 1e-8)
 
         # Entity-aware attention
+        # Mask for padded entities (where length is 0)
+        # key_padding_mask: (batch_size, num_entities) where True means padded
+        entity_mask = (entity_lengths.squeeze(-1) == 0)
+
         entity_reps_attn, _ = self.entity_attention(
-            entity_reps, entity_reps, entity_reps
+            entity_reps, entity_reps, entity_reps,
+            key_padding_mask=entity_mask
         )
         entity_reps = entity_reps + entity_reps_attn
 
         # Pair entities for relation classification
+        num_entities = entity_reps.size(1)
         head_reps = entity_reps.unsqueeze(2).expand(-1, -1, num_entities, -1)
         tail_reps = entity_reps.unsqueeze(1).expand(-1, num_entities, -1, -1)
 
-        pair_reps = torch.cat([head_reps, tail_reps], dim=-1)
+        pair_reps = torch.cat([head_reps, tail_reps], dim=-1) # (batch_size, num_entities, num_entities, hidden_size * 4)
 
         # Relation classification
-        relation_logits = self.relation_classifier(pair_reps)
-        relation_logits = relation_logits.view(batch_size, num_entities, num_entities, self.num_relations)
+        relation_logits = self.relation_classifier(pair_reps) # (batch_size, num_entities, num_entities, num_relations)
 
         if labels is not None:
-            # Reshape labels for loss calculation
             loss_fct = nn.CrossEntropyLoss()
+            # Flatten only the first 3 dimensions for the batch/pairs
             loss = loss_fct(
                 relation_logits.view(-1, self.num_relations),
                 labels.view(-1)
@@ -415,23 +396,10 @@ class EntityRelationExtractor:
 
     Provides a unified interface for training and inference using BERT-BiLSTM-CRF
     models for both NER and relation extraction.
-
-    Attributes:
-        ner_model: BERT-BiLSTM-CRF model for NER.
-        rel_model: BERT-BiLSTM model for relation extraction.
-        tokenizer: BERT tokenizer.
-        device: Device for model training/inference.
     """
 
-    def __init__(
-        self,
-        bert_model_name: str = 'bert-base-uncased',
-        ner_hidden_size: int = 128,
-        rel_hidden_size: int = 128,
-        num_layers: int = 2,
-        dropout: float = 0.1,
-        device: Optional[str] = None
-    ) -> None:
+    def __init__(self, bert_model_name: str = 'bert-base-uncased', ner_hidden_size: int = 128, rel_hidden_size: int = 128,
+                num_layers: int = 2, dropout: float = 0.1, max_entities: int = 32, device: Optional[str] = None) -> None:
         """Initialize entity and relation extractor.
 
         Args:
@@ -440,6 +408,7 @@ class EntityRelationExtractor:
             rel_hidden_size: Hidden size for relation BiLSTM (default: 128).
             num_layers: Number of BiLSTM layers (default: 2).
             dropout: Dropout probability (default: 0.1).
+            max_entities: Maximum number of entities per sequence (default: 32).
             device: Device for model training/inference. Uses CUDA if available.
         """
         self.bert_model_name = bert_model_name
@@ -454,17 +423,13 @@ class EntityRelationExtractor:
         self.rel_hidden_size = rel_hidden_size
         self.num_layers = num_layers
         self.dropout = dropout
+        self.max_entities = max_entities
 
-    def fit_ner(
-        self,
-        train_texts: List[List[str]],
-        train_labels: List[List[str]],
-        label2idx: Dict[str, int],
-        batch_size: int = 16,
-        epochs: int = 10,
-        learning_rate: float = 2e-5,
-        warmup_steps: int = 100
-    ) -> BERTBiLSTMCRF:
+        self.label2idx = {'O': 0}
+        self.rel2idx = {'no_relation': 0}
+
+    def fit_ner(self, train_texts: List[List[str]], train_labels: List[List[str]], label2idx: Dict[str, int], batch_size: int = 16,
+                epochs: int = 10, learning_rate: float = 2e-5, warmup_steps: int = 100) -> BERTBiLSTMCRF:
         """Train the NER model.
 
         Args:
@@ -497,13 +462,7 @@ class EntityRelationExtractor:
         )
 
         # Initialize model
-        self.ner_model = BERTBiLSTMCRF(
-            bert_model_name=self.bert_model_name,
-            hidden_size=self.ner_hidden_size,
-            num_layers=self.num_layers,
-            dropout=self.dropout,
-            label2idx=label2idx
-        ).to(self.device)
+        self._init_ner_model()
 
         # Optimizer and scheduler
         optimizer = AdamW(self.ner_model.parameters(), lr=learning_rate)
@@ -536,10 +495,7 @@ class EntityRelationExtractor:
 
         return self.ner_model
 
-    def predict_entities(
-        self,
-        texts: List[List[str]]
-    ) -> List[List[Tuple[int, int, str]]]:
+    def predict_entities(self, texts: List[List[str]]) -> List[List[Tuple[int, int, str]]]:
         """Predict entities in text sequences.
 
         Args:
@@ -552,15 +508,17 @@ class EntityRelationExtractor:
             raise ValueError("NER model not trained. Call fit_ner() first.")
 
         self.ner_model.eval()
+        # Use dummy labels for NERDataset
         dataset = NERDataset(
             texts=texts,
-            labels=[['O'] * len(t) for t in texts],  # Dummy labels
+            labels=[['O'] * len(t) for t in texts],
             tokenizer=self.tokenizer,
             label2idx=self.label2idx
         )
         dataloader = DataLoader(dataset, batch_size=16)
 
         all_entities = []
+        batch_start = 0
         with torch.no_grad():
             for batch in dataloader:
                 input_ids = batch['input_ids'].to(self.device)
@@ -568,21 +526,34 @@ class EntityRelationExtractor:
 
                 predictions = self.ner_model.decode(input_ids, attention_mask)
 
-                for text, preds in zip(batch['input_ids'], predictions):
-                    entities = self._extract_entities_from_predictions(text, preds)
+                for i, preds in enumerate(predictions):
+                    # Map sub-token predictions back to original words
+                    original_text = texts[batch_start + i]
+                    encoding = self.tokenizer(
+                        original_text,
+                        is_split_into_words=True
+                    )
+                    word_ids = encoding.word_ids()
+
+                    word_labels = []
+                    previous_word_idx = None
+                    for sub_idx, word_idx in enumerate(word_ids):
+                        if word_idx is not None and word_idx != previous_word_idx:
+                            if sub_idx < len(preds):
+                                word_labels.append(preds[sub_idx])
+                        previous_word_idx = word_idx
+
+                    entities = self._extract_entities_from_predictions(word_labels)
                     all_entities.append(entities)
+
+                batch_start += input_ids.size(0)
 
         return all_entities
 
-    def _extract_entities_from_predictions(
-        self,
-        input_ids: torch.Tensor,
-        predictions: List[str]
-    ) -> List[Tuple[int, int, str]]:
+    def _extract_entities_from_predictions(self, predictions: List[str]) -> List[Tuple[int, int, str]]:
         """Extract entity spans from predicted labels.
 
         Args:
-            input_ids: Input token IDs.
             predictions: List of predicted labels.
 
         Returns:
@@ -607,6 +578,7 @@ class EntityRelationExtractor:
                         entities.append(current_entity)
                         current_entity = (i, i + 1, entity_type)
                 else:
+                    # I- without B-, treat as B-
                     current_entity = (i, i + 1, label[2:])
             else:
                 if current_entity is not None:
@@ -618,17 +590,8 @@ class EntityRelationExtractor:
 
         return entities
 
-    def fit_relation(
-        self,
-        train_texts: List[List[str]],
-        train_entities: List[List[Tuple[int, int, str]]],
-        train_relations: List[List[Tuple[int, int, str]]],
-        rel2idx: Dict[str, int],
-        batch_size: int = 8,
-        epochs: int = 15,
-        learning_rate: float = 2e-5,
-        warmup_steps: int = 100
-    ) -> BERTBiLSTMRelationModel:
+    def fit_relation(self, train_texts: List[List[str]], train_entities: List[List[Tuple[int, int, str]]], train_relations: List[List[Tuple[int, int, str]]],
+                    rel2idx: Dict[str, int], batch_size: int = 8, epochs: int = 15, learning_rate: float = 2e-5, warmup_steps: int = 100) -> BERTBiLSTMRelationModel:
         """Train the relation extraction model.
 
         Args:
@@ -652,17 +615,12 @@ class EntityRelationExtractor:
             entities=train_entities,
             relations=train_relations,
             tokenizer=self.tokenizer,
-            rel2idx=rel2idx
+            rel2idx=rel2idx,
+            max_entities=self.max_entities
         )
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        self.rel_model = BERTBiLSTMRelationModel(
-            bert_model_name=self.bert_model_name,
-            hidden_size=self.rel_hidden_size,
-            num_layers=self.num_layers,
-            dropout=self.dropout,
-            rel2idx=rel2idx
-        ).to(self.device)
+        self._init_rel_model()
 
         optimizer = AdamW(self.rel_model.parameters(), lr=learning_rate)
         total_steps = len(dataloader) * epochs
@@ -679,7 +637,7 @@ class EntityRelationExtractor:
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 entity_positions = batch['entity_positions'].to(self.device)
-                relation_matrix = batch['relation_matrix'].to(self.device)
+                relation_matrix = batch['labels'].to(self.device)
 
                 optimizer.zero_grad()
                 _, loss = self.rel_model(
@@ -696,11 +654,7 @@ class EntityRelationExtractor:
 
         return self.rel_model
 
-    def predict_relations(
-        self,
-        texts: List[List[str]],
-        entities: List[List[Tuple[int, int, str]]]
-    ) -> List[List[Tuple[int, int, str]]]:
+    def predict_relations(self, texts: List[List[str]], entities: List[List[Tuple[int, int, str]]]) -> List[List[Tuple[int, int, str]]]:
         """Predict relations in text sequences given entities.
 
         Args:
@@ -719,7 +673,8 @@ class EntityRelationExtractor:
             entities=entities,
             relations=[[] for _ in texts],  # Dummy relations
             tokenizer=self.tokenizer,
-            rel2idx=self.rel2idx
+            rel2idx=self.rel2idx,
+            max_entities=self.max_entities
         )
         dataloader = DataLoader(dataset, batch_size=8)
 
@@ -740,10 +695,7 @@ class EntityRelationExtractor:
 
         return all_relations
 
-    def _extract_relations_from_logits(
-        self,
-        relation_logits: torch.Tensor
-    ) -> List[Tuple[int, int, str]]:
+    def _extract_relations_from_logits(self, relation_logits: torch.Tensor) -> List[Tuple[int, int, str]]:
         """Extract relations from model logits.
 
         Args:
@@ -769,10 +721,7 @@ class EntityRelationExtractor:
 
         return relations
 
-    def extract(
-        self,
-        text: str
-    ) -> Dict[str, Any]:
+    def extract(self, text: str) -> Dict[str, Any]:
         """Extract entities and relations from raw text.
 
         Args:
@@ -781,8 +730,8 @@ class EntityRelationExtractor:
         Returns:
             Dictionary containing extracted entities and relations.
         """
-        # Tokenize text
-        tokens = self.tokenizer.tokenize(text)
+        # Tokenize text - simple whitespace split
+        tokens = text.split()
 
         if self.ner_model:
             entities = self.predict_entities([tokens])[0]
@@ -807,14 +756,50 @@ class EntityRelationExtractor:
             ]
         }
 
+    def _init_ner_model(self) -> None:
+        """Initialize NER model."""
+        self.ner_model = BERTBiLSTMCRF(
+            bert_model_name=self.bert_model_name,
+            hidden_size=self.ner_hidden_size,
+            num_layers=self.num_layers,
+            dropout=self.dropout,
+            label2idx=self.label2idx
+        ).to(self.device)
+
+    def _init_rel_model(self) -> None:
+        """Initialize relation extraction model."""
+        self.rel_model = BERTBiLSTMRelationModel(
+            bert_model_name=self.bert_model_name,
+            hidden_size=self.rel_hidden_size,
+            num_layers=self.num_layers,
+            dropout=self.dropout,
+            rel2idx=self.rel2idx,
+            max_entities=self.max_entities
+        ).to(self.device)
+
     def save(self, save_path: str) -> None:
-        """Save models to disk.
+        """Save models and configuration to disk.
 
         Args:
             save_path: Directory to save models.
         """
         import os
+        import json
         os.makedirs(save_path, exist_ok=True)
+
+        # Save configuration
+        config = {
+            'bert_model_name': self.bert_model_name,
+            'ner_hidden_size': self.ner_hidden_size,
+            'rel_hidden_size': self.rel_hidden_size,
+            'num_layers': self.num_layers,
+            'dropout': self.dropout,
+            'max_entities': self.max_entities,
+            'label2idx': self.label2idx,
+            'rel2idx': self.rel2idx
+        }
+        with open(f"{save_path}/config.json", 'w') as f:
+            json.dump(config, f, indent=4)
 
         if self.ner_model:
             torch.save(self.ner_model.state_dict(), f"{save_path}/ner_model.pt")
@@ -825,19 +810,38 @@ class EntityRelationExtractor:
         self.tokenizer.save_pretrained(save_path)
 
     def load(self, load_path: str) -> None:
-        """Load models from disk.
+        """Load models and configuration from disk.
 
         Args:
             load_path: Directory containing saved models.
         """
-        from transformers import BertTokenizer
+        import json
+        import os
+
+        # Load configuration
+        with open(f"{load_path}/config.json", 'r') as f:
+            config = json.load(f)
+
+        self.bert_model_name = config['bert_model_name']
+        self.ner_hidden_size = config['ner_hidden_size']
+        self.rel_hidden_size = config['rel_hidden_size']
+        self.num_layers = config['num_layers']
+        self.dropout = config['dropout']
+        self.max_entities = config['max_entities']
+        self.label2idx = config['label2idx']
+        self.rel2idx = config['rel2idx']
+
+        self.idx2label = {int(v): k for k, v in self.label2idx.items()}
+        self.idx2rel = {int(v): k for k, v in self.rel2idx.items()}
 
         self.tokenizer = BertTokenizer.from_pretrained(load_path)
 
-        if self.ner_model:
-            self.ner_model.load_state_dict(torch.load(f"{load_path}/ner_model.pt"))
+        if os.path.exists(f"{load_path}/ner_model.pt"):
+            self._init_ner_model()
+            self.ner_model.load_state_dict(torch.load(f"{load_path}/ner_model.pt", map_location=self.device))
             self.ner_model.to(self.device)
 
-        if self.rel_model:
-            self.rel_model.load_state_dict(torch.load(f"{load_path}/rel_model.pt"))
+        if os.path.exists(f"{load_path}/rel_model.pt"):
+            self._init_rel_model()
+            self.rel_model.load_state_dict(torch.load(f"{load_path}/rel_model.pt", map_location=self.device))
             self.rel_model.to(self.device)
