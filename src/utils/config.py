@@ -53,13 +53,15 @@ class GraphConfig(NamedTuple):
     uri: str
     user: str
     password: str
+    embedding_model: str
+    bert_model_name: str
 
     @classmethod
     def from_dict(cls, data: dict) -> "GraphConfig":
         """Create GraphConfig from a dictionary.
 
         Args:
-            data: Dictionary containing neo4j config keys.
+            data: Dictionary containing neo4j, embedding and extraction config keys.
 
         Returns:
             GraphConfig instance.
@@ -68,6 +70,8 @@ class GraphConfig(NamedTuple):
             uri=data.get("neo4j", {}).get("uri", ""),
             user=data.get("neo4j", {}).get("user", ""),
             password=data.get("neo4j", {}).get("password", ""),
+            embedding_model=data.get("embedding", {}).get("model", "BAAI/bge-small-en-v1.5"),
+            bert_model_name=data.get("extraction", {}).get("bert_model", "bert-base-uncased"),
         )
 
     @classmethod

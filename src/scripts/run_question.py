@@ -66,6 +66,17 @@ def main() -> None:
         temperature=args.temperature,
         default_headers={"Host": "localhost"} 
     )
+    # Separate LLM for graph extraction — uses a strict JSON prompt so
+    # _extract_relations_with_llm gets parseable structured data.
+    # The main llm stays JSON-free for query routing (one-word answer).
+    extraction_llm = ChatOpenAI(
+        base_url=config.llm.api_url,
+        api_key="not-needed",
+        model=config.llm.model_name,
+        temperature=0.0,
+        default_headers={"Host": "localhost"},
+    )
+
     # Load configs from specified path or default location
     config_path = args.config
     if config_path is not None:
@@ -74,7 +85,7 @@ def main() -> None:
     graph_config = GraphConfig.load(config_path)
 
     vector_rag = VectorRAG(vector_config)
-    graph_rag = GraphRAG(graph_config)
+    graph_rag = GraphRAG(graph_config, llm=extraction_llm)
 
     # Initialize storage
     graph_rag.init_storage(args.graph_collection)
@@ -90,7 +101,7 @@ def main() -> None:
 
     if not args.skip_ingest:
         print("--- Ingesting Graph Data ---")
-        graph_rag.ingest(EXTRACTED_RELATIONS)
+        graph_rag.ingest(pdf_files)
 
         print("\n--- Ingesting Vector Data ---")
         for strategy in STRATEGIES:

@@ -19,6 +19,7 @@ torch>=2.2.1
 
 # Ekstrakcja relacji (BERT-BiLSTM-CRF)
 spacy>=3.7.4
+pytorch-crf>=0.7.2
 
 # Narzędzia pomocnicze
 pypdf>=6.11.0
