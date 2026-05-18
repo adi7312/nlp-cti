@@ -7,6 +7,15 @@ class BaseRAG(ABC):
 
     Subclasses must implement ingestion, search, and storage initialization methods.
     """
+    @abstractmethod
+    def init_storage(self, name: str, **kwargs: Dict[str, Any]) -> None:
+        """Initialize the storage backend (e.g., create collection, ensure schema).
+
+        Args:
+            name: Name of the storage collection/database.
+            **kwargs: Additional initialization parameters.
+        """
+        pass
 
     @abstractmethod
     def ingest(self, data: Any, **kwargs: Dict[str, Any]) -> None:
@@ -28,15 +37,5 @@ class BaseRAG(ABC):
 
         Returns:
             List of search results.
-        """
-        pass
-
-    @abstractmethod
-    def init_storage(self, name: str, **kwargs: Dict[str, Any]) -> None:
-        """Initialize the storage backend (e.g., create collection, ensure schema).
-
-        Args:
-            name: Name of the storage collection/database.
-            **kwargs: Additional initialization parameters.
         """
         pass
