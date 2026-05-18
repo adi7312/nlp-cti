@@ -2,16 +2,21 @@
 
 This module implements a deep learning-based approach for named entity recognition
 (NER) and relation extraction using BERT embeddings, BiLSTM layers, and CRF decoding.
+
+When trained models are unavailable, falls back to:
+- HuggingFace pre-trained NER pipeline (SecureModernBERT-NER) for entity extraction
+- Local LLM for relation extraction
 """
 
 from typing import Dict, List, Optional, Tuple, Any
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup
+from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup, pipeline as hf_pipeline
 from torch.optim import AdamW
 from torchcrf import CRF
 import re
+import json
 
 class NERDataset(Dataset):
     """Dataset for Named Entity Recognition."""
@@ -400,7 +405,8 @@ class EntityRelationExtractor:
     """
 
     def __init__(self, bert_model_name: str = 'bert-base-uncased', ner_hidden_size: int = 128, rel_hidden_size: int = 128,
-                num_layers: int = 2, dropout: float = 0.1, max_entities: int = 32, device: Optional[str] = None) -> None:
+                num_layers: int = 2, dropout: float = 0.1, max_entities: int = 32, device: Optional[str] = None,
+                llm: Any = None) -> None:
         """Initialize entity and relation extractor.
 
         Args:
@@ -411,6 +417,7 @@ class EntityRelationExtractor:
             dropout: Dropout probability (default: 0.1).
             max_entities: Maximum number of entities per sequence (default: 32).
             device: Device for model training/inference. Uses CUDA if available.
+            llm: Optional LangChain chat model for LLM-based relation extraction fallback.
         """
         self.bert_model_name = bert_model_name
         self.tokenizer = BertTokenizer.from_pretrained(bert_model_name)
@@ -428,6 +435,15 @@ class EntityRelationExtractor:
 
         self.label2idx = {'O': 0}
         self.rel2idx = {'no_relation': 0}
+
+        self.hf_ner = hf_pipeline(
+            "token-classification",
+            model="attack-vector/SecureModernBERT-NER",
+            aggregation_strategy="first"
+        )
+        self.llm = llm
+        self._re_attempts = 0
+        self._re_successes = 0
 
     def fit_ner(self, train_texts: List[List[str]], train_labels: List[List[str]], label2idx: Dict[str, int], batch_size: int = 16,
                 epochs: int = 10, learning_rate: float = 2e-5, warmup_steps: int = 100) -> BERTBiLSTMCRF:
@@ -725,6 +741,9 @@ class EntityRelationExtractor:
     def extract(self, text: str) -> Dict[str, Any]:
         """Extract entities and relations from raw text.
 
+        Uses BERT-BiLSTM-CRF if trained models are available.
+        Falls back to HuggingFace pre-trained NER + optional LLM for RE otherwise.
+
         Args:
             text: Raw input text.
 
@@ -737,11 +756,17 @@ class EntityRelationExtractor:
         if self.ner_model:
             entities = self.predict_entities([tokens])[0]
         else:
-            entities = []
+            entities = self._extract_entities_hf(text)
 
         if self.rel_model and entities:
             relations = self.predict_relations([tokens], [entities])[0]
+        elif self.llm and entities:
+            relations = self._extract_relations_with_llm(text, tokens, entities)
         else:
+            if not entities:
+                pass  # no entities to relate
+            elif not self.llm:
+                print("  [EXTRACT] ⚠ entities found but llm is None — RE disabled")
             relations = []
 
         return {
@@ -756,6 +781,155 @@ class EntityRelationExtractor:
                 for head, tail, rtype in relations
             ]
         }
+
+    def _extract_entities_hf(self, text: str) -> List[Tuple[int, int, str]]:
+        """Extract entities using HuggingFace pre-trained NER pipeline.
+
+        Maps character-level spans from the HF pipeline to token-level spans
+        compatible with the existing entity format.
+
+        Args:
+            text: Raw input text.
+
+        Returns:
+            List of (token_start, token_end, entity_type) tuples.
+        """
+        matches = list(re.finditer(r"[\w']+|[.,!?;:\"()\[\]\-]", text))
+        tokens = [m.group() for m in matches]
+
+        char_to_token = {}
+        for idx, m in enumerate(matches):
+            for c in range(m.start(), m.end()):
+                char_to_token[c] = idx
+
+        hf_entities = self.hf_ner(text)
+
+        seen = set()
+        entities = []
+        for ent in hf_entities:
+            etype = ent.get('entity_group', ent.get('entity', 'UNKNOWN'))
+            if etype.startswith('B-') or etype.startswith('I-'):
+                etype = etype[2:]
+            start_char = ent['start']
+            end_char = ent['end']
+
+            # HF spans often include leading whitespace or trailing punctuation
+            # that our regex tokenizer skips. Walk to the nearest mapped char.
+            token_start = char_to_token.get(start_char)
+            if token_start is None:
+                for c in range(start_char + 1, min(start_char + 20, len(text))):
+                    if c in char_to_token:
+                        token_start = char_to_token[c]
+                        break
+            token_end = None
+            for c in range(end_char - 1, start_char - 1, -1):
+                if c in char_to_token:
+                    token_end = char_to_token[c] + 1
+                    break
+            # Also try walking forward a bit from end_char
+            if token_end is None:
+                for c in range(end_char, min(end_char + 10, len(text))):
+                    if c in char_to_token:
+                        token_end = char_to_token[c] + 1
+                        break
+
+            if token_start is not None and token_end is not None:
+                key = (token_start, token_end, etype)
+                if key not in seen:
+                    seen.add(key)
+                    entities.append((token_start, token_end, etype))
+
+        return entities
+
+    def _extract_relations_with_llm(
+        self, text: str, tokens: List[str], entities: List[Tuple[int, int, str]]
+    ) -> List[Tuple[int, int, str]]:
+        """Extract relations between entities using the local LLM.
+
+        Args:
+            text: Raw input text.
+            tokens: Tokenized text.
+            entities: List of (token_start, token_end, entity_type) tuples.
+
+        Returns:
+            List of (head_idx, tail_idx, relation_type) tuples.
+        """
+        if len(entities) < 2:
+            return []
+
+        self._re_attempts += 1
+
+        name_to_idx = {}
+        entity_lines = []
+        for i, (start, end, etype) in enumerate(entities):
+            name = " ".join(tokens[start:end])
+            entity_lines.append(f"  {name} ({etype})")
+            name_to_idx[name] = i
+
+        entities_str = "\n".join(entity_lines)
+
+        # Truncate text to prevent blowing the LLM context window
+        text_truncated = text[:2000] if len(text) > 2000 else text
+
+        prompt = (
+            "Extract relationships between named entities in this CTI text.\n\n"
+            f"--- Entities ---\n{entities_str}\n\n"
+            f"--- Text ---\n{text_truncated}\n\n"
+            "--- Task ---\n"
+            "Return ONLY a JSON array. Each element must be:\n"
+            '  {"head": "<entity name>", "tail": "<entity name>", "relation": "<TYPE>"}\n'
+            'Example: [{"head": "APT29", "tail": "CVE-2021-26855", "relation": "USES"}]\n\n'
+            "Use these relation types: TARGETS, USES, ATTRIBUTED_TO, CONNECTS_TO, ASSOCIATED_WITH, EXPLOITS, HAS_TYPE, LOCATED_IN\n"
+            "Return [] if no clear relationships exist.\n"
+            "JSON array:"
+        )
+
+        try:
+            from langchain_core.messages import HumanMessage
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            content = response.content.strip()
+
+            # Strip markdown fences if present
+            if "```" in content:
+                content = content.split("```")[-2] if content.count("```") >= 2 else content.split("```")[-1]
+                content = content.strip()
+            # Some models prepend "json" before the JSON payload
+            content = content.removeprefix("json").removeprefix("JSON").strip()
+
+            if not content:
+                print("  [RE] Empty content after stripping prefixes")
+                return []
+
+            relations_data = json.loads(content)
+            if not isinstance(relations_data, list):
+                print(f"  [RE] LLM returned non-list JSON: {type(relations_data).__name__}")
+                return []
+
+            relations = []
+            for rel in relations_data:
+                head_name = rel.get("head", "")
+                tail_name = rel.get("tail", "")
+                if not head_name or not tail_name:
+                    continue
+                rtype = rel.get("relation", "RELATED_TO").upper().replace(" ", "_")
+
+                head_idx = name_to_idx.get(head_name)
+                tail_idx = name_to_idx.get(tail_name)
+
+                if head_idx is not None and tail_idx is not None and head_idx != tail_idx:
+                    relations.append((head_idx, tail_idx, rtype))
+
+            if relations:
+                self._re_successes += 1
+            return relations
+
+        except json.JSONDecodeError as e:
+            print(f"  [RE] JSON parse error: {e}")
+            print(f"  [RE] Raw LLM response: {content[:300]}")
+            return []
+        except Exception as e:
+            print(f"  [RE] LLM call failed: {type(e).__name__}: {e}")
+            return []
 
     def _init_ner_model(self) -> None:
         """Initialize NER model."""
