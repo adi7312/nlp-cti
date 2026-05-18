@@ -224,7 +224,7 @@ class GraphRAG(BaseRAG):
                     batch=batch
                 )
 
-    def _compute_communities(self, resolution: float = 1.0) -> None:
+    def _compute_communities(self) -> None:
         """Compute communities of entities using the Leiden algorithm.
 
         Args:
