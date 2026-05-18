@@ -207,20 +207,3 @@ class LeidenAlgorithm:
             current_adj = self._aggregate_graph(norm_adj, contiguous_refined)
 
         return global_labels
-
-
-def leiden(adjacency: Union[np.ndarray, List[List[float]], Dict[int, Dict[int, float]]], resolution: float = 1.0,
-           max_iter: int = 10, random_state: Optional[int] = None) -> np.ndarray:
-    """Wrapper function for Leiden community detection.
-
-    Args:
-        adjacency: Adjacency representation.
-        resolution: Resolution parameter (higher values = more communities).
-        max_iter: Maximum number of macroscopic aggregation iterations.
-        random_state: Random seed for reproducibility.
-
-    Returns:
-        Community labels for each node.
-    """
-    algorithm = LeidenAlgorithm(resolution=resolution, max_iter=max_iter, random_state=random_state)
-    return algorithm.fit(adjacency)
