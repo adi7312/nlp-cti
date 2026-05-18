@@ -282,10 +282,13 @@ class GraphRAG(BaseRAG):
         # Strategy 1: NER on the query
         query_extraction = self.extractor.extract(query)
         tokens = query_extraction["tokens"]
-        ner_entities = [
-            " ".join(tokens[ent["start"]:ent["end"]])
-            for ent in query_extraction["entities"]
-        ]
+        ner_entities = []
+        for ent in query_extraction["entities"]:
+            name = " ".join(tokens[ent["start"]:ent["end"]])
+            # Strip trailing punctuation that NER may attach
+            name = name.strip(".,!?;:()[]\"' ")
+            if name:
+                ner_entities.append(name)
         if ner_entities:
             return ner_entities
 
