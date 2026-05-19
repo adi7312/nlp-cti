@@ -9,6 +9,7 @@ from typing import List, Dict, Any, cast
 from src.rags.base import BaseRAG
 from src.utils.config import VectorConfig
 from src.utils.chunk_strategies import chunk_text
+from src.utils.topic_modelling import topic_modelling
 
 
 class VectorRAG(BaseRAG):
@@ -43,16 +44,20 @@ class VectorRAG(BaseRAG):
             print(f"Collection {name} already exists.")
 
     def ingest(self, data: List[str], **kwargs: Dict[str, Any]) -> None:
-        """Load PDFs, chunk them, vectorize them, and upload to Qdrant.
+        """Load PDFs, chunk them, optionally apply topic modeling, vectorize them, and upload to Qdrant.
 
         Args:
             data: List of PDF file paths to ingest.
             **kwargs: Additional parameters including:
                 - collection_name: Name of the collection to ingest to (default: "cti_reports")
                 - strategy: Chunking strategy (default: "sliding_window")
+                - topic_strategy: Topic modelling strategy (lda, lsa) (default: None)
+                - n_topics: Number of topics to extract (default: 5)
         """
         collection_name = cast(str, kwargs.get("collection_name", "cti_reports"))
         strategy = cast(str, kwargs.get("strategy", "sliding_window"))
+        topic_strategy = kwargs.get("topic_strategy")
+        n_topics = int(kwargs.get("n_topics", 5))
 
         collections = self.qdrant_client.get_collections().collections
         if any(col.name == collection_name for col in collections):
@@ -69,17 +74,33 @@ class VectorRAG(BaseRAG):
             chunks = chunk_text(docs, strategy=strategy, embedding_model=self.lc_embedding_model)
             all_chunks.extend(chunks)
 
-        print(f"Total chunks created using '{strategy}' strategy: {len(all_chunks)}")
+        print(f"Total chunks created: {len(all_chunks)}")
+
+        if topic_strategy:
+            print(f"Applying topic modelling strategy: {topic_strategy}")
+            all_chunks = topic_modelling(all_chunks, strategy=topic_strategy, n_topics=n_topics)
 
         points = []
         for chunk in all_chunks:
             text = chunk.page_content
             metadata = chunk.metadata
-            vector = self.embedding_model.encode(text).tolist()
+
+            # Enrich text with topic keywords if available to influence retrieval/context
+            if "topic_keywords" in metadata:
+                enriched_text = f"[Topics: {metadata['topic_keywords']}] {text}"
+            else:
+                enriched_text = text
+
+            vector = self.embedding_model.encode(enriched_text).tolist()
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
-                payload={"text": text, "source": metadata.get("source", "Unknown")},
+                payload={
+                    "text": enriched_text,
+                    "source": metadata.get("source", "Unknown"),
+                    "topic_id": metadata.get("topic_id"),
+                    "topic_keywords": metadata.get("topic_keywords")
+                },
             )
             points.append(point)
 

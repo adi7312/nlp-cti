@@ -10,6 +10,7 @@ from src.utils.config import GraphConfig
 from src.utils.extraction import EntityRelationExtractor
 from src.utils.community_detection import LeidenAlgorithm
 from src.utils.chunk_strategies import chunk_text
+from src.utils.topic_modelling import topic_modelling
 
 
 class GraphRAG(BaseRAG):
@@ -65,14 +66,18 @@ class GraphRAG(BaseRAG):
                     print(f"Index/Constraint creation failed: {e}")
 
     def ingest(self, data: List[str], **kwargs: Dict[str, Any]) -> None:
-        """Load PDFs, extract entities/relations using BERT-BiLSTM-CRF, and save to Neo4j.
+        """Load PDFs, optionally apply topic modeling, extract entities/relations using BERT-BiLSTM-CRF, and save to Neo4j.
 
         Args:
             data: List of PDF file paths to ingest.
             **kwargs: Additional parameters including:
                 - strategy: Chunking strategy (default: "sliding_window")
+                - topic_strategy: Topic modelling strategy (lda, lsa) (default: None)
+                - n_topics: Number of topics to extract (default: 5)
         """
         strategy = cast(str, kwargs.get("strategy", "sliding_window"))
+        topic_strategy = kwargs.get("topic_strategy")
+        n_topics = int(kwargs.get("n_topics", 5))
 
         # Initialize storage (ensure constraints/indexes)
         self.init_storage()
@@ -85,12 +90,26 @@ class GraphRAG(BaseRAG):
             chunks = chunk_text(docs, strategy=strategy, embedding_model=self.lc_embedding_model)
             all_chunks.extend(chunks)
 
+        print(f"Total chunks created: {len(all_chunks)}")
+
+        if topic_strategy:
+            print(f"Applying topic modelling strategy: {topic_strategy}")
+            all_chunks = topic_modelling(all_chunks, strategy=topic_strategy, n_topics=n_topics)
+
         print(f"Extracting entities and relations from {len(all_chunks)} chunks...")
 
         all_extractions = []
         for chunk in all_chunks:
             text = chunk.page_content
-            extraction = self.extractor.extract(text)
+            metadata = chunk.metadata
+
+            # Enrich text with topic keywords if available to influence extraction
+            if "topic_keywords" in metadata:
+                enriched_text = f"[Topics: {metadata['topic_keywords']}] {text}"
+            else:
+                enriched_text = text
+
+            extraction = self.extractor.extract(enriched_text)
             all_extractions.append(extraction)
 
         self._save_extractions_batched(all_extractions)

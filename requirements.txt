@@ -22,6 +22,7 @@ spacy>=3.7.4
 pytorch-crf>=0.7.2
 
 # Narzędzia pomocnicze
+scikit-learn>=1.4.0
 pypdf>=6.11.0
 pydantic>=2.7.0
 python-dotenv>=1.0.1

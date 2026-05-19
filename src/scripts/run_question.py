@@ -61,10 +61,10 @@ def main() -> None:
     # llm = ChatOllama(model=args.model, temperature=args.temperature)
     llm = ChatOpenAI(
         base_url=config.llm.api_url,
-        api_key="not-needed", 
-        model=config.llm.model_name, 
+        api_key="not-needed",
+        model=config.llm.model_name,
         temperature=args.temperature,
-        default_headers={"Host": "localhost"} 
+        default_headers={"Host": "localhost"}
     )
     # Separate LLM for graph extraction — uses a strict JSON prompt so
     # _extract_relations_with_llm gets parseable structured data.
@@ -137,6 +137,7 @@ def main() -> None:
         print(final_answer)
         print("=======================================")
     print("Goodbye!")
+    graph_rag.close()
 
 
 if __name__ == "__main__":

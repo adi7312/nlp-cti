@@ -31,7 +31,9 @@ from src.utils.query_routing import route_query
 # Constants
 CSV_PATH = "experiments/dataset/cti_ground_truth_local.csv"
 RAW_DATA_DIR = "raw_data"
-STRATEGIES = ["sliding_window", "fixed", "sentence", "semantic"]
+TOPIC_STRATEGIES = ["none", "lda", "lsa"]
+FIXED_CHUNKING = "sliding_window"
+N_TOPICS = 5
 
 config = get_config()
 
@@ -53,15 +55,15 @@ def generate_answer(llm, query: str, vector_context: List[str], graph_context: L
 
 def main():
     # 1. Initialize models and RAGs
-    print("Initializing LLM and RAG components...")
+    print("Initializing LLM and RAG components for Topic Modelling Evaluation...")
     llm = ChatOpenAI(
         base_url=config.llm.api_url,
-        api_key="not-needed",
-        model=config.llm.model_name,
+        api_key="not-needed", 
+        model=config.llm.model_name, 
         temperature=0.0,
-        default_headers={"Host": "localhost"}
+        default_headers={"Host": "localhost"} 
     )
-
+    
     wrapped_llm = LangchainLLMWrapper(llm)
     local_langchain_embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
     wrapped_embeddings = LangchainEmbeddingsWrapper(local_langchain_embeddings)
@@ -81,27 +83,40 @@ def main():
     # 3. Get raw data files
     raw_data_path = os.path.abspath(RAW_DATA_DIR)
     pdf_files = sorted(glob.glob(os.path.join(raw_data_path, "*.pdf")))
-
+    
     if not pdf_files:
         print(f"No PDF files found in {raw_data_path}")
         return
 
-    # 4. Iterate over chunking strategies
-    for strategy in STRATEGIES:
-        collection_name = f"cti_reports_{strategy}"
+    # 4. Iterate over topic modelling strategies
+    for strategy in TOPIC_STRATEGIES:
+        topic_strategy = None if strategy == "none" else strategy
+        collection_name = f"cti_reports_topic_{strategy}"
+        
         print(f"\n{'='*60}")
-        print(f"Testing Strategy: {strategy.upper()}")
+        print(f"Testing Topic Strategy: {strategy.upper()}")
         print(f"{'='*60}")
 
         # Ingest into Vector store
-        print(f"Ingesting into Vector collection: {collection_name}...")
-        vector_rag.ingest(pdf_files, collection_name=collection_name, strategy=strategy)
-
-        # Ingest into Graph store (clearing existing data first for strategy independence)
-        print(f"Clearing and Ingesting Graph Data for {strategy}...")
+        print(f"Ingesting into Vector collection: {collection_name} (Topic Strategy: {strategy})...")
+        vector_rag.ingest(
+            pdf_files, 
+            collection_name=collection_name, 
+            strategy=FIXED_CHUNKING, 
+            topic_strategy=topic_strategy,
+            n_topics=N_TOPICS
+        )
+        
+        # Ingest into Graph store
+        print(f"Clearing and Ingesting Graph Data for Topic Strategy: {strategy}...")
         with graph_rag.neo4j_driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
-        graph_rag.ingest(pdf_files, strategy=strategy)
+        graph_rag.ingest(
+            pdf_files, 
+            strategy=FIXED_CHUNKING, 
+            topic_strategy=topic_strategy,
+            n_topics=N_TOPICS
+        )
 
         data_dict = {
             "user_input": [],
@@ -114,11 +129,11 @@ def main():
         for idx, row in df.iterrows():
             question = row[q_col]
             ground_truth = row[gt_col]
-
+            
             try:
                 # Use query routing logic
                 route_decision = route_query(question, llm=llm)
-
+                
                 vector_data: List[str] = []
                 graph_data: List[str] = []
 
@@ -129,13 +144,12 @@ def main():
                     graph_data = graph_rag.search(question)
 
                 answer = generate_answer(llm, question, vector_data, graph_data)
-
+                
                 data_dict["user_input"].append(question)
                 data_dict["reference"].append(ground_truth)
                 data_dict["response"].append(answer)
-                # Combine contexts for RAGAS evaluation
                 data_dict["retrieved_contexts"].append(vector_data + graph_data)
-
+                
                 print(f"  [{idx+1}/{len(df)}] Route: {route_decision}")
             except Exception as e:
                 print(f"  [ERROR] Question {idx}: {e}")
@@ -143,16 +157,16 @@ def main():
 
         # 5. RAGAS Evaluation
         eval_dataset = Dataset.from_dict(data_dict)
-        print(f"Evaluating {strategy} results with Ragas metrics...")
-
-        safe_config = RunConfig(max_workers=1, timeout=600)
+        print(f"Evaluating Topic Strategy: {strategy} with Ragas metrics...")
+        
+        safe_config = RunConfig(max_workers=1, timeout=600) 
         metrics = [
             context_precision,
             context_recall,
             faithfulness,
             answer_relevancy
         ]
-
+        
         score = evaluate(
             dataset=eval_dataset,
             metrics=metrics,
@@ -160,19 +174,19 @@ def main():
             embeddings=wrapped_embeddings,
             run_config=safe_config
         )
-
+        
         # Save results to CSV
-        eval_df = score.to_pandas()
-        output_file = f"experiments/chunking/results/eval_results_{strategy}.csv"
+        output_file = f"experiments/topic_mod/results/eval_results_{strategy}.csv"
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        eval_df = score.to_pandas()
         eval_df.to_csv(output_file, index=False)
-
+        
         print(f"Results saved to {output_file}")
-        print(f"\nScores for {strategy}:")
+        print(f"\nScores for Topic Strategy {strategy}:")
         print(score)
 
     graph_rag.close()
-    print("\nRefactored evaluation completed successfully.")
+    print("\nTopic modelling evaluation completed successfully.")
 
 if __name__ == "__main__":
     main()
